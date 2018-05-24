@@ -66,6 +66,7 @@ change `success = move_group.move();` to `success = static_cast<bool>(move_group
 - `~/catkin_ws/src/kinova-ros/kinova_moveit/kinova_arm_moveit_demo/src/test_accuracy.cpp`
 - `~/catkin_ws/src/kinova-ros/kinova_moveit/kinova_arm_moveit_demo/src/work_scene.cpp`
 
+make ROS packages using:
 ```
 catkin_make
 ```
@@ -76,5 +77,10 @@ for usb access
 sudo cp ~/catkin_ws/src/kinova_driver/udev/10-kinova-arm.rules /etc/udev/rules.d/
 ```
 
+Make sure the workspace is properly overlayed by the setup script.
+```
+source devel/setup.bash
+echo $ROS_PACKAGE_PATH /home/bamboo/catkin_ws/src:/opt/ros/lunar/share
+```
 
 
