@@ -43,6 +43,12 @@ source ~/.bashrc
 sudo apt-get install python-rosinstall python-rosinstall-generator python-wstool build-essential
 ```
 
+#### 1.7 Install Moveit ROS
+```
+sudo apt-get install ros-lunar-moveit
+source /opt/ros/lunar/setup.bash
+```
+
 #### 2. Install Kinova-ROS
 
 ```
@@ -54,7 +60,11 @@ cd ~/catkin_ws
 
 **Important: must edit c++ files and replace the following**
 
-change `success = move_group.move();` to `success = static_cast<bool>(move_group.move());`{.cpp}
+change `success = move_group.move();` to `success = static_cast<bool>(move_group.move());` in the following files:
+- `~/catkin_ws/src/kinova-ros/kinova_moveit/kinova_arm_moveit_demo/src/motion_plan.cpp`
+- `~/catkin_ws/src/kinova-ros/kinova_moveit/kinova_arm_moveit_demo/src/pick_place.cpp`
+- `~/catkin_ws/src/kinova-ros/kinova_moveit/kinova_arm_moveit_demo/src/test_accuracy.cpp`
+- `~/catkin_ws/src/kinova-ros/kinova_moveit/kinova_arm_moveit_demo/src/work_scene.cpp`
 
 ```
 catkin_make
