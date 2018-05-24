@@ -50,6 +50,13 @@ mkdir ~/catkin_ws/src
 cd ~/catkin_ws/src
 git clone https://github.com/Kinovarobotics/kinova-ros.git kinova-ros
 cd ~/catkin_ws
+```
+
+**Important: must edit c++ files and replace the following**
+
+change `success = move_group.move();` to `success = static_cast<bool>(move_group.move());`{.cpp}
+
+```
 catkin_make
 ```
 
