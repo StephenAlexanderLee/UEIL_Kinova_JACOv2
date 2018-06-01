@@ -18,3 +18,7 @@ SOURCES += main.cpp\
 HEADERS  += jaco_kinova.h
 
 FORMS    += jaco_kinova.ui
+
+DISTFILES += \
+    raster.sh \
+    initialize.sh
