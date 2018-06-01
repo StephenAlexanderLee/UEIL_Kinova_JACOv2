@@ -1,0 +1,338 @@
+#! /usr/bin/env python
+"""A set of example functions that can be used to control the arm"""
+import rospy
+import actionlib
+import numpy
+import kinova_msgs.msg
+import geometry_msgs.msg
+import tf
+import std_msgs.msg
+import math
+import thread
+from kinova_msgs.srv import *
+from sensor_msgs.msg import JointState
+import argparse
+
+
+""" Global variable """
+arm_joint_number = 0
+finger_number = 0
+prefix = 'j2s6s300'
+finger_maxDist = 18.9/2/1000  # max distance for one finger
+finger_maxTurn = 6800  # max thread rotation for one finger
+currentCartesianCommand = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home in unit mq
+
+def cartesian_pose_client(position, orientation):
+    """Send a cartesian goal to the action server."""
+    action_address = '/' + prefix + 'driver/pose_action/tool_pose'
+    client = actionlib.SimpleActionClient(action_address, kinova_msgs.msg.ArmPoseAction)
+    client.wait_for_server()
+
+    goal = kinova_msgs.msg.ArmPoseGoal()
+    goal.pose.header = std_msgs.msg.Header(frame_id=(prefix + 'link_base'))
+    goal.pose.pose.position = geometry_msgs.msg.Point(
+        x=position[0], y=position[1], z=position[2])
+    goal.pose.pose.orientation = geometry_msgs.msg.Quaternion(
+        x=orientation[0], y=orientation[1], z=orientation[2], w=orientation[3])
+
+    # print('goal.pose in client 1: {}'.format(goal.pose.pose)) # debug
+
+    client.send_goal(goal)
+
+    if client.wait_for_result(rospy.Duration(10.0)):
+        return client.get_result()
+    else:
+        client.cancel_all_goals()
+        print('        the cartesian action timed-out')
+        return None
+
+def QuaternionNorm(Q_raw):
+    qx_temp,qy_temp,qz_temp,qw_temp = Q_raw[0:4]
+    qnorm = math.sqrt(qx_temp*qx_temp + qy_temp*qy_temp + qz_temp*qz_temp + qw_temp*qw_temp)
+    qx_ = qx_temp/qnorm
+    qy_ = qy_temp/qnorm
+    qz_ = qz_temp/qnorm
+    qw_ = qw_temp/qnorm
+    Q_normed_ = [qx_, qy_, qz_, qw_]
+    return Q_normed_
+
+
+def Quaternion2EulerXYZ(Q_raw):
+    Q_normed = QuaternionNorm(Q_raw)
+    qx_ = Q_normed[0]
+    qy_ = Q_normed[1]
+    qz_ = Q_normed[2]
+    qw_ = Q_normed[3]
+
+    tx_ = math.atan2((2 * qw_ * qx_ - 2 * qy_ * qz_), (qw_ * qw_ - qx_ * qx_ - qy_ * qy_ + qz_ * qz_))
+    ty_ = math.asin(2 * qw_ * qy_ + 2 * qx_ * qz_)
+    tz_ = math.atan2((2 * qw_ * qz_ - 2 * qx_ * qy_), (qw_ * qw_ + qx_ * qx_ - qy_ * qy_ - qz_ * qz_))
+    EulerXYZ_ = [tx_,ty_,tz_]
+    return EulerXYZ_
+
+
+def EulerXYZ2Quaternion(EulerXYZ_):
+    tx_, ty_, tz_ = EulerXYZ_[0:3]
+    sx = math.sin(0.5 * tx_)
+    cx = math.cos(0.5 * tx_)
+    sy = math.sin(0.5 * ty_)
+    cy = math.cos(0.5 * ty_)
+    sz = math.sin(0.5 * tz_)
+    cz = math.cos(0.5 * tz_)
+
+    qx_ = sx * cy * cz + cx * sy * sz
+    qy_ = -sx * cy * sz + cx * sy * cz
+    qz_ = sx * sy * cz + cx * cy * sz
+    qw_ = -sx * sy * sz + cx * cy * cz
+
+    Q_ = [qx_, qy_, qz_, qw_]
+    return Q_
+
+def getcurrentCartesianCommand(prefix_):
+    # wait to get current position
+    topic_address = '/' + prefix_ + 'driver/out/cartesian_command'
+    rospy.Subscriber(topic_address, kinova_msgs.msg.KinovaPose, setcurrentCartesianCommand)
+    rospy.wait_for_message(topic_address, kinova_msgs.msg.KinovaPose)
+    print 'position listener obtained message for Cartesian pose. '
+
+
+def setcurrentCartesianCommand(feedback):
+    global currentCartesianCommand
+
+    currentCartesianCommand_str_list = str(feedback).split("\n")
+
+    for index in range(0,len(currentCartesianCommand_str_list)):
+        temp_str=currentCartesianCommand_str_list[index].split(": ")
+        currentCartesianCommand[index] = float(temp_str[1])
+
+def kinova_robotTypeParser(kinova_robotType_):
+    """ Argument kinova_robotType """
+    global robot_category, robot_category_version, wrist_type, arm_joint_number, robot_mode, finger_number, prefix, finger_maxDist, finger_maxTurn 
+    robot_category = kinova_robotType_[0]
+    robot_category_version = int(kinova_robotType_[1])
+    wrist_type = kinova_robotType_[2]
+    arm_joint_number = int(kinova_robotType_[3])
+    robot_mode = kinova_robotType_[4]
+    finger_number = int(kinova_robotType_[5])
+    prefix = kinova_robotType_ + "_"
+    finger_maxDist = 18.9/2/1000  # max distance for one finger in meter
+    finger_maxTurn = 6800  # max thread turn for one finger
+
+def argumentParser(argument_):
+    """ Argument parser """
+    parser = argparse.ArgumentParser(description='Drive robot end-effector to command Cartesian pose')
+    parser.add_argument('kinova_robotType', metavar='kinova_robotType', type=str, default='j2n6a300',
+                        help='kinova_RobotType is in format of: [{j|m|r|c}{1|2}{s|n}{4|6|7}{s|a}{2|3}{0}{0}]. eg: j2n6a300 refers to jaco v2 6DOF assistive 3fingers. Please be noted that not all options are valided for different robot types.')
+    parser.add_argument('unit', metavar='unit', type=str, nargs='?', default='mq',
+                        choices={'mq', 'mdeg', 'mrad'},
+                        help='Unit of Cartesian pose command, in mq(Position meter, Orientation Quaternion),  mdeg(Position meter, Orientation Euler-XYZ in degree), mrad(Position meter, Orientation Euler-XYZ in radian)]')
+    parser.add_argument('time_bt', nargs=1, type=float, default=0.5, help='time in between acquisitions')
+    parser.add_argument('pose_value', nargs=6, type=float, help='Cartesian pose values: first three values for position, and last three for number of points')
+    parser.add_argument('orientation', nargs='*', type=float, help=' next three(unit mdeg or mrad)/four(unit mq) for Orientation')
+    parser.add_argument('-r', '--relative', action='store_true',
+                        help='the input values are relative values to current position.')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help='display Cartesian pose values in alternative convention(mq, mdeg or mrad)')
+    # parser.add_argument('-f', action='store_true', help='assign finger values from a file')
+
+    args_ = parser.parse_args(argument_)
+    # print('pose_mq in argumentParser 1: {}'.format(args_.pose_value))  # debug
+    return args_
+
+def rasterParser(pose_value_, unit_, orientation_):
+    global currentCartesianCommand
+    
+    position_ = pose_value_;
+    orient_ = orientation_    
+
+    for i in range(0,3):
+            position_[i] = pose_value_[i]
+
+    if unit_ == 'mq':
+
+        orientation_XYZ = Quaternion2EulerXYZ(orient_)
+        orientation_xyz_list = [orientation_XYZ[i] + currentCartesianCommand[3+i] for i in range(0,3)]
+        orientation_q = EulerXYZ2Quaternion(orientation_xyz_list)
+
+
+        orientation_rad = Quaternion2EulerXYZ(orientation_q)
+        orientation_deg = list(map(math.degrees, orientation_rad))
+
+    elif unit_ == 'mdeg':
+
+        orientation_deg_list = list(map(math.degrees, currentCartesianCommand[3:]))
+        orientation_deg = [orient_[i] + orientation_deg_list[i] for i in range(0,3)]
+
+        orientation_rad = list(map(math.radians, orientation_deg))
+        orientation_q = EulerXYZ2Quaternion(orientation_rad)
+
+    elif unit_ == 'mrad':
+
+        orientation_rad_list =  currentCartesianCommand[3:]
+        orientation_rad = [orient_[i] + orientation_rad_list[i] for i in range(0,3)]
+
+        orientation_deg = list(map(math.degrees, orientation_rad))
+        orientation_q = EulerXYZ2Quaternion(orientation_rad)
+
+    else:
+        raise Exception("Cartesian value have to be in unit: mq, mdeg or mrad")
+
+    pose_mq_ = position_ + orientation_q
+    pose_mdeg_ = position_ + orientation_deg
+    pose_mrad_ = position_ + orientation_rad
+
+    # print('pose_mq in unitParser 1: {}'.format(pose_mq_))  # debug
+
+    return pose_mq_, pose_mdeg_, pose_mrad_
+
+
+class pos:
+    def __init__(self):
+        self.Xscan = 0
+        self.Yscan = 0
+        self.Zscan = 0
+        self.XN = 0
+        self.YN = 0
+        self.ZN = 0
+        self.xv = 0
+        self.yv = 0
+        self.zv = 0
+
+
+def rasterparam(pose_value_):
+    global currentCartesianCommand
+    pos.Xscan = args.pose_value[0]
+    pos.Yscan = args.pose_value[1]
+    pos.Zscan = args.pose_value[2]
+    pos.XN = int(args.pose_value[3])
+    pos.YN = int(args.pose_value[4])
+    pos.ZN = int(args.pose_value[5])
+    
+    x = numpy.linspace(currentCartesianCommand[0]-pos.Xscan/2,currentCartesianCommand[0]+pos.Xscan/2,pos.XN)
+    y = numpy.linspace(currentCartesianCommand[1]-pos.Yscan/2,currentCartesianCommand[1]+pos.Yscan/2,pos.YN)
+    z = numpy.linspace(currentCartesianCommand[2]-pos.Zscan/2,currentCartesianCommand[2]+pos.Zscan/2,pos.ZN)
+
+    if pos.Xscan <= 0 | pos.XN <= 0:
+        pos.yv, pos.zv = numpy.meshgrid(y,z)
+        pos.xv = numpy.ones(pos.yv.shape)*currentCartesianCommand[0]
+        pos.XN = 1
+    elif pos.Yscan <= 0 | pos.YN <= 0:
+        pos.xv, pos.zv = numpy.meshgrid(x,z)
+        pos.yv = numpy.ones(pos.xv.shape)*currentCartesianCommand[1]
+        pos.YN = 1
+    elif pos.Zscan <= 0 | pos.ZN <= 0:
+        pos.xv, pos.yv = numpy.meshgrid(x,y)
+        pos.zv = numpy.ones(pos.xv.shape)*currentCartesianCommand[2]
+        pos.ZN = 1
+    else:
+        pos.xv, pos.yv, pos.zv = numpy.meshgrid(x,y,z)
+        
+    return pos
+
+
+
+
+def verboseParser(verbose, pose_mq_):
+    """ Argument verbose """
+    position_ = pose_mq_[:3]
+    orientation_q = pose_mq_[3:]
+    if verbose:
+        orientation_rad = Quaternion2EulerXYZ(orientation_q)
+        orientation_deg = list(map(math.degrees, orientation_rad))
+        print('Cartesian position is: {}'.format(position_))
+        print('Cartesian orientation in Quaternion is: ')
+        print('qx {:0.3f}, qy {:0.3f}, qz {:0.3f}, qw {:0.3f}'.format(orientation_q[0], orientation_q[1], orientation_q[2], orientation_q[3]))
+        print('Cartesian orientation in Euler-XYZ(radian) is: ')
+        print('tx {:0.3f}, ty {:0.3f}, tz {:0.3f}'.format(orientation_rad[0], orientation_rad[1], orientation_rad[2]))
+        print('Cartesian orientation in Euler-XYZ(degree) is: ')
+        print('tx {:3.1f}, ty {:3.1f}, tz {:3.1f}'.format(orientation_deg[0], orientation_deg[1], orientation_deg[2]))
+
+def move(pose_mq_):
+    try:
+
+        poses = [float(n) for n in pose_mq_]
+
+        result = cartesian_pose_client(poses[:3], poses[3:])
+
+        print('Cartesian pose sent!')
+
+    except rospy.ROSInterruptException:
+        print "program interrupted before completion"
+
+    verboseParser(args.verbose, poses)
+
+def orientation_check(unit_,orientation_):
+    if unit_ == 'mq':
+        if len(orientation_) != 4:
+            print('Number of input values {} is not equal to 4 (4 Quaternion).'.format(len(orientation_)))
+            sys.exit(0)
+    elif (unit_ == 'mrad') | (unit_ == 'mdeg'):
+        if len(orientation_) != 3:
+            print('Number of input values {} is not equal to 3 (3 EulerAngles).'.format(len(orientation_)))
+            sys.exit(0)
+    else:
+        raise Exception('Cartesian value have to be in unit: mq, mdeg or mrad')
+
+if __name__ == '__main__':
+
+    # Initialize Robot
+    args = argumentParser(None)
+    kinova_robotTypeParser(args.kinova_robotType)
+    rospy.init_node(prefix + 'pose_action_client')
+
+    # get current coordinates and change orientation if needed
+    getcurrentCartesianCommand(prefix)
+    pose_mq, pose_mdeg, pose_mrad = rasterParser(currentCartesianCommand[:3],args.unit, args.orientation)
+    move(pose_mq)
+    initial_pose = pose_mq;
+
+    r = rospy.Rate(100)
+    rospy.sleep(0.5)
+
+    # raster scan
+    getcurrentCartesianCommand(prefix)
+    pos = rasterparam(args.pose_value)
+    if args.unit == 'mq':
+        args.orientation = [0,0,0,0]
+    elif (args.unit == 'mrad') | (args.unit == 'mdeg'):
+        args.orientation = [0,0,0]
+
+
+    for i in range(pos.XN):
+        for j in range(pos.YN):
+            for k in range(pos.ZN):
+                if pos.XN == 1:                
+                    pose_mq, pose_mdeg, pose_mrad = rasterParser([pos.xv[j,k],pos.yv[j,k],pos.zv[j,k]],args.unit, args.orientation)
+                    #print(pos.xv[j,k],pos.yv[j,k],pos.zv[j,k])
+                elif pos.YN == 1:
+                    pose_mq, pose_mdeg, pose_mrad = rasterParser([pos.xv[i,k],pos.yv[i,k],pos.zv[i,k]],args.unit, args.orientation)
+                    #print(pos.xv[i,k],pos.yv[i,k],pos.zv[i,k])
+                elif pos.ZN == 1:
+                    pose_mq, pose_mdeg, pose_mrad = rasterParser([pos.xv[i,j],pos.yv[i,j],pos.zv[i,j]],args.unit, args.orientation)
+                    #print(pos.xv[i,j],pos.yv[i,j],pos.zv[i,j])
+                else:
+                    pose_mq, pose_mdeg, pose_mrad = rasterParser([pos.xv[i,j,k],pos.yv[i,j,k],pos.zv[i,j,k]],args.unit, args.orientation)
+                    #print(pos.xv[i,j,k])
+                
+                move(pose_mq)
+                r.sleep()
+                rospy.sleep(numpy.float64(args.time_bt))
+        
+    move(initial_pose)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
