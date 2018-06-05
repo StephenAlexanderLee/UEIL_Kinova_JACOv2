@@ -95,13 +95,3 @@ export ROS_PACKAGE_PATH=/home/bamboo/catkin_ws/src/:$ROS_PACKAGE_PATH
 #### 3. Load JACO GUI repository 
 
 
-
-
-#### 4. install python package for matlab
-
-```
-cd /usr/local/MATLAB/R*/extern/engines/python/
-sudo python setup.py install
-```
-
-
